@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>パケット分割・再構築シミュレーター</title>
+  <style>
+    :root{
+      --bg:#1a202c;
+      --panel:#2d3748;
+      --ink:#e9ecff;
+      
+      /* 色定義 */
+      --c-app: #a878a6;   /* アプリ（紫） */
+      --c-trans: #a69a78; /* TCP（茶） */
+      --c-net: #78a68a;   /* IP（緑） */
+      --c-link: #8a8c99;  /* Eth（灰） */
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family: "Helvetica Neue", Arial, sans-serif;
+      color:var(--ink); background: var(--bg); padding:20px;
+    }
+
+    .wrap{ max-width:1000px; margin:0 auto; display:grid; gap:20px; grid-template-columns: 1fr 1fr; }
+    .full-width { grid-column: 1 / -1; }
+    @media (max-width: 800px){ .wrap{ grid-template-columns: 1fr; } }
+
+    .panel{
+      background: var(--panel); border-radius:12px; padding:20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 15px;
+    }
+
+    h2{margin:0;font-size:18px;color:#fff; font-weight: bold; border-left:4px solid #4fd1c5; padding-left:10px;}
+
+    /* --- パケット表示エリア --- */
+    .diagramBox{
+      border:2px dashed rgba(255,255,255,.15); border-radius:12px; padding:20px;
+      background: rgba(0,0,0,.3); min-height: 120px;
+      display:flex; align-items:center; justify-content:center;
+      overflow:hidden; position: relative;
+    }
+    
+    /* パケットのコンテナ */
+    .packet-stream, .single-packet {
+      display: flex; gap: 15px; align-items: center; justify-content: center;
+      transition: all 0.3s ease;
+    }
+
+    /* 個別のパケットの塊 */
+    .packet-chunk {
+      display: flex; align-items: center;
+      background: rgba(255,255,255,0.05);
+      padding: 4px; border-radius: 6px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      animation: popIn 0.3s forwards;
+    }
+    @keyframes popIn { from{transform:scale(0); opacity:0;} to{transform:scale(1); opacity:1;} }
+
+    /* セグメント（ヘッダやデータ） */
+    .seg{
+      padding:8px 10px; border-radius:4px; margin:0 1px;
+      color:#1a202c; font-weight:bold; font-size:12px; white-space: nowrap;
+      box-shadow: 0 2px 5px rgba(0,0,0,.3);
+    }
+    .s-app{background:var(--c-app); color:#fff} 
+    .s-trans{background:var(--c-trans); color:#fff} 
+    .s-net{background:var(--c-net); color:#fff}
+    .s-link{background:var(--c-link); color:#fff} 
+    /* データブロック（白） */
+    .s-data{background:#fff; min-width:80px; text-align:center; color:#1a202c;} 
+
+    /* --- 階層リスト --- */
+    .stack-tower { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+    .layer-row {
+      display: flex; background: rgba(0,0,0,0.2); border-radius: 4px; overflow: hidden;
+      font-size: 13px; opacity: 0.5; transition: 0.3s;
+    }
+    .layer-row.active { opacity: 1; transform: scale(1.02); background: rgba(255,255,255,0.1); box-shadow: 0 0 10px rgba(255,255,255,0.1); }
+    .lr-num { width: 50px; background: rgba(0,0,0,0.3); color: #ccc; display:flex; align-items:center; justify-content:center; font-size:11px; }
+    .lr-name { padding: 8px; color: #fff; font-weight:bold; flex:1; }
+    
+    .row-app.active .lr-name { color: var(--c-app); }
+    .row-trans.active .lr-name { color: var(--c-trans); }
+    .row-net.active .lr-name { color: var(--c-net); }
+    .row-link.active .lr-name { color: var(--c-link); }
+
+    /* --- アニメーション用ロード --- */
+    .road{ height:6px; background:rgba(255,255,255,.1); margin:20px 0; position:relative; border-radius:3px; }
+    .runner {
+      position: absolute; top: -12px; width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; opacity: 0;
+    }
+
+    /* --- ボタン --- */
+    button{
+      border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:13px; color: #1a202c; transition:0.2s; width:100%;
+    }
+    button:disabled{ opacity:0.3; cursor:not-allowed; }
+    .btn-encap { background: #81e6d9; }
+    .btn-decap { background: #81e6d9; }
+    .btn-send { background: #4fd1c5; padding: 12px; font-size:15px; }
+    .btn-reset { background: #fc8181; }
+
+    .status-text { min-height: 3em; font-size: 14px; color: #cbd5e0; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; }
+    .hl { color: #81e6d9; font-weight: bold; }
+
+    /* PC画面 */
+    .pc-monitor { background: #1a1a1a; padding: 10px; border-radius: 8px; border:1px solid #444; }
+    .pc-screen { 
+      background: #000; height: 100px; border-radius: 4px; overflow: hidden; 
+      display: flex; align-items: center; justify-content: center; position: relative;
+    }
+    .pc-screen.on { background: #fff; }
+    .screen-content { text-align:center; opacity:0; transform:translateY(10px); transition:0.5s; }
+    .pc-screen.on .screen-content { opacity:1; transform:translateY(0); }
+
+  </style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="panel full-width" style="text-align: center; gap:5px;">
+    <h1 style="margin:0; color:#fff; font-size:22px; border-bottom:2px solid #4fd1c5; display:inline-block; padding-bottom:5px;">パケット分割・再構築シミュレーター</h1>
+    <p style="margin:5px 0 0; color:#a0aec0; font-size:14px;">
+      送信時にデータを「分割」して送り、受信側で「再構築」する様子を観察します。
+    </p>
+  </div>
+
+  <section class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2>送信側 (Encapsulation)</h2>
+      <div style="display:flex; gap:5px; width:160px;">
+        <button class="btn-encap" id="btnEncap">カプセル化 ▼</button>
+        <button class="btn-reset" id="btnReset">Reset</button>
+      </div>
+    </div>
+    
+    <div class="diagramBox">
+      <div class="single-packet" id="sendView"></div>
+    </div>
+    <div class="status-text" id="sendStatus">データを作成しました。</div>
+
+    <div class="stack-tower">
+      <div class="layer-row row-app" id="sl-4"><div class="lr-num">Layer4</div><div class="lr-name">アプリ層 (HTTP)</div></div>
+      <div class="layer-row row-trans" id="sl-3"><div class="lr-num">Layer3</div><div class="lr-name">トランスポート層 (TCP)</div></div>
+      <div class="layer-row row-net" id="sl-2"><div class="lr-num">Layer2</div><div class="lr-name">インターネット層 (IP)</div></div>
+      <div class="layer-row row-link" id="sl-1"><div class="lr-num">Layer1</div><div class="lr-name">NWインタフェース層 (Eth)</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2>受信側 (Decapsulation)</h2>
+      <button class="btn-decap" id="btnDecap" style="width:140px;" disabled>非カプセル化 ▲</button>
+    </div>
+
+    <div class="diagramBox">
+      <div class="packet-stream" id="recvView"></div>
+    </div>
+    <div class="status-text" id="recvStatus">待機中...</div>
+
+    <div class="stack-tower">
+      <div class="layer-row row-app" id="rl-4"><div class="lr-num">Layer4</div><div class="lr-name">アプリ層 (HTTP)</div></div>
+      <div class="layer-row row-trans" id="rl-3"><div class="lr-num">Layer3</div><div class="lr-name">トランスポート層 (TCP)</div></div>
+      <div class="layer-row row-net" id="rl-2"><div class="lr-num">Layer2</div><div class="lr-name">インターネット層 (IP)</div></div>
+      <div class="layer-row row-link" id="rl-1"><div class="lr-num">Layer1</div><div class="lr-name">NWインタフェース層 (Eth)</div></div>
+    </div>
+  </section>
+
+  <section class="panel full-width" style="padding:15px;">
+    <button class="btn-send" id="btnSend" disabled>インターネットへ送信 (分割して転送) 🚀</button>
+    <div class="road" id="road"></div>
+  </section>
+  
+  <section class="panel full-width">
+    <div style="display:flex; gap:20px; align-items:center;">
+      <div style="flex:1; font-size:14px; color:#cbd5e0;">
+        <strong>受信完了画面</strong><br>
+        バラバラに届いたパケットが正しく結合（再構築）され、元のデータ（白いブロック）が取り出されると、アプリケーションがそれを処理します。
+      </div>
+      <div style="width:250px;">
+        <div class="pc-monitor">
+          <div class="pc-screen" id="pcScreen">
+            <div class="screen-content">
+              <div style="font-size:32px;">😺</div>
+              <div style="font-size:12px; color:#333; font-weight:bold;">Image Loaded!</div>
+            </div>
+            <div id="noSig" style="color:#555; font-size:10px;">NO SIGNAL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  /* === 設定 === */
+  const SEG = {
+    data: { cls:"s-data", txt:"データ" },
+    http: { cls:"s-app",  txt:"HTTP" },
+    tcp:  { cls:"s-trans",txt:"TCP" },
+    ip:   { cls:"s-net",  txt:"IP" },
+    eth:  { cls:"s-link", txt:"Eth" },
+    fcs:  { cls:"s-link", txt:"FCS" }
+  };
+
+  /* === 状態管理 === */
+  let sendStage = 0; // 0..4
+  let sent = false;
+  let recvStage = 0; // 4(着信)..0(完了)
+  let animating = false;
+
+  /* === DOM要素 === */
+  const elSendView = document.getElementById("sendView");
+  const elRecvView = document.getElementById("recvView");
+  const elSendStatus = document.getElementById("sendStatus");
+  const elRecvStatus = document.getElementById("recvStatus");
+  const road = document.getElementById("road");
+  const pcScreen = document.getElementById("pcScreen");
+  const noSig = document.getElementById("noSig");
+
+  // タワー
+  const getLayers = (p) => [
+    document.getElementById(`${p}-4`),
+    document.getElementById(`${p}-3`),
+    document.getElementById(`${p}-2`),
+    document.getElementById(`${p}-1`)
+  ];
+  const sendLayers = getLayers('sl');
+  const recvLayers = getLayers('rl');
+
+  /* === 描画: 送信側 (1つのパケットが育つ) === */
+  function updateSend() {
+    elSendView.innerHTML = "";
+    
+    // 1つのコンテナを作る
+    const container = document.createElement("div");
+    container.className = "packet-chunk"; // 共通スタイル利用
+    
+    // 中身を構築 (内側から外側へ追加したいが、Flexは左から右なので順序に注意)
+    // 順番: [Eth] [IP] [TCP] [HTTP] [DATA] [FCS]
+    
+    if(sendStage>=4) addSeg(container, SEG.eth);
+    if(sendStage>=3) addSeg(container, SEG.ip);
+    if(sendStage>=2) addSeg(container, SEG.tcp);
+    if(sendStage>=1) addSeg(container, SEG.http);
+    
+    addSeg(container, SEG.data); // 常に表示
+    
+    if(sendStage>=4) addSeg(container, SEG.fcs);
+
+    elSendView.appendChild(container);
+
+    // テキスト
+    const msgs = [
+      "【データ作成】送りたいデータ（Webページや画像）があります。",
+      "【Layer4】HTTPヘッダを付与。データの種類を定義します。",
+      "【Layer3】TCPヘッダを付与。ポート番号などをつけます。（送信時はまだ1つに見えますが、内部で分割の準備をします）",
+      "【Layer2】IPヘッダを付与。宛先住所を書きます。",
+      "【Layer1】Ethernetヘッダを付与。送信準備完了！"
+    ];
+    elSendStatus.innerText = msgs[sendStage];
+
+    // ハイライト
+    sendLayers.forEach(l => l.classList.remove("active"));
+    if(sendStage>0) sendLayers[sendStage-1].classList.add("active");
+  }
+
+  function addSeg(parent, type) {
+    const el = document.createElement("div");
+    el.className = "seg " + type.cls;
+    el.innerText = type.txt;
+    parent.appendChild(el);
+  }
+
+  /* === 描画: 受信側 (3つのパケット -> 1つに合体) === */
+  function updateRecv() {
+    elRecvView.innerHTML = "";
+    if(!sent) {
+      elRecvStatus.innerText = "待機中...";
+      recvLayers.forEach(l => l.classList.remove("active"));
+      return;
+    }
+
+    // ★修正箇所★ Stage 0 (完了時) にデータブロックを表示
+    if(recvStage === 0) {
+      // 残ったデータブロックを表示
+      const container = document.createElement("div");
+      container.className = "packet-chunk";
+      addSeg(container, SEG.data); // 白いブロックのみ
+      elRecvView.appendChild(container);
+
+      elRecvStatus.innerHTML = "<span class='hl'>非カプセル化完了！</span><br>データ（白いブロック）が取り出されました。<br>PCがこれを処理して画像を表示します。";
+      
+      recvLayers.forEach(l => l.classList.remove("active"));
+      pcScreen.classList.add("on");
+      noSig.style.display = "none";
+      return;
+    }
+
+    // Stage 1 (結合後): ここで「1つのパケット」に戻る
+    if(recvStage === 1) {
+      const container = document.createElement("div");
+      container.className = "packet-chunk";
+      // [HTTP] [Data]
+      addSeg(container, SEG.http);
+      addSeg(container, {cls:"s-data", txt:"結合データ"});
+      elRecvView.appendChild(container);
+
+      elRecvStatus.innerHTML = "【Layer4 アプリ層】バラバラだったパケットを<span class='hl'>1つに結合(再構築)</span>しました！<br>HTTPヘッダを読み取ります。";
+      highlightRecv(0); // App active
+      return;
+    }
+
+    // Stage 2~4 (3つのパケット)
+    for(let i=1; i<=3; i++) {
+      const chunk = document.createElement("div");
+      chunk.className = "packet-chunk";
+      
+      if(recvStage >= 4) addSeg(chunk, SEG.eth);
+      if(recvStage >= 3) addSeg(chunk, SEG.ip);
+      // Stage 2 (TCP)のときはまだ3つある
+      if(recvStage >= 2) {
+        const tcpSeg = {cls:"s-trans", txt:`TCP:${i}`}; // 番号付き
+        addSeg(chunk, tcpSeg);
+      }
+      
+      const dataSeg = {cls:"s-data", txt:`D-${i}`};
+      addSeg(chunk, dataSeg);
+
+      if(recvStage >= 4) addSeg(chunk, SEG.fcs);
+      
+      elRecvView.appendChild(chunk);
+    }
+
+    const rMsgs = {
+      4: "【Layer1 受信】分割された<span class='hl'>3つのパケット</span>が届きました。Ethヘッダを確認。",
+      3: "【Layer2 インターネット層】IPヘッダを確認。3つとも自分宛てです。",
+      2: "【Layer3 トランスポート層】TCPヘッダを確認。<span class='hl'>通し番号(1,2,3)</span>を見て、データの順序を整えます。次は結合です！"
+    };
+    elRecvStatus.innerHTML = rMsgs[recvStage];
+
+    // ハイライト
+    if(recvStage===4) highlightRecv(3); // Link
+    if(recvStage===3) highlightRecv(2); // Net
+    if(recvStage===2) highlightRecv(1); // Trans
+  }
+
+  function highlightRecv(idx) {
+    recvLayers.forEach(l => l.classList.remove("active"));
+    if(recvLayers[idx]) recvLayers[idx].classList.add("active");
+  }
+
+  /* === ボタン動作 === */
+  const btnEncap = document.getElementById("btnEncap");
+  const btnSend = document.getElementById("btnSend");
+  const btnDecap = document.getElementById("btnDecap");
+  const btnReset = document.getElementById("btnReset");
+
+  function checkBtns() {
+    btnEncap.disabled = animating || sent || sendStage>=4;
+    btnSend.disabled  = animating || sent || sendStage<4;
+    btnDecap.disabled = animating || !sent || recvStage<=0;
+  }
+
+  btnEncap.onclick = () => {
+    if(sendStage<4) { sendStage++; updateSend(); checkBtns(); }
+  };
+
+  btnSend.onclick = () => {
+    animating = true;
+    checkBtns();
+    
+    // 送信アニメーション: ここで「分裂」を演出
+    // 3つの小さなパケットを生成して飛ばす
+    for(let i=0; i<3; i++) {
+      setTimeout(() => {
+        const p = document.createElement("div");
+        p.className = "runner";
+        p.innerText = "📦";
+        p.style.left = "0%";
+        road.appendChild(p);
+
+        const anim = p.animate([
+          { left:"0%", opacity:1, transform:"scale(1)" },
+          { left:"98%", opacity:1, transform:"scale(1)" } // 右端へ
+        ], { duration: 1200, easing: "linear" });
+
+        anim.onfinish = () => {
+          p.remove();
+          // 最後のパケットが着いたら
+          if(i===2) {
+            sent = true;
+            recvStage = 4;
+            animating = false;
+            updateRecv(); // 受信側表示
+            checkBtns();
+          }
+        };
+      }, i * 300); // 0.3秒ずつずらす
+    }
+  };
+
+  btnDecap.onclick = () => {
+    if(recvStage>0) {
+      // 演出
+      const chunks = elRecvView.children;
+      for(let c of chunks) {
+        c.style.transform = "translateY(5px)";
+        c.style.opacity = "0.7";
+      }
+
+      setTimeout(() => {
+        recvStage--;
+        updateRecv();
+        checkBtns();
+      }, 200);
+    }
+  };
+
+  btnReset.onclick = () => {
+    sendStage = 0; sent = false; recvStage = 0; animating = false;
+    updateSend();
+    elRecvView.innerHTML = "";
+    elRecvStatus.innerText = "待機中...";
+    pcScreen.classList.remove("on");
+    noSig.style.display = "block";
+    recvLayers.forEach(l => l.classList.remove("active"));
+    checkBtns();
+  };
+
+  // 初期化
+  updateSend();
+  checkBtns();
+
+</script>
+</body>
+</html>
